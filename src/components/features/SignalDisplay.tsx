@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Clock } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 
 interface SignalDisplayProps {
@@ -7,6 +7,7 @@ interface SignalDisplayProps {
     confidence: number;
     analysis: string;
     timestamp: number;
+    entryTime?: string;
   };
 }
 
@@ -17,6 +18,7 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
       color: 'text-green-400',
       bgColor: 'bg-green-500/20',
       borderColor: 'border-green-500/50',
+      glowColor: 'shadow-green-500/30',
       label: 'SINAL DE COMPRA'
     },
     VENDA: {
@@ -24,6 +26,7 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
       color: 'text-red-400',
       bgColor: 'bg-red-500/20',
       borderColor: 'border-red-500/50',
+      glowColor: 'shadow-red-500/30',
       label: 'SINAL DE VENDA'
     },
     NEUTRO: {
@@ -31,6 +34,7 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
       color: 'text-yellow-400',
       bgColor: 'bg-yellow-500/20',
       borderColor: 'border-yellow-500/50',
+      glowColor: 'shadow-yellow-500/30',
       label: 'SINAL NEUTRO'
     }
   };
@@ -39,7 +43,7 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
   const Icon = config.icon;
 
   return (
-    <Card className={`p-6 border-2 ${config.borderColor} ${config.bgColor} animate-slide-up`}>
+    <Card className={`p-6 border-2 ${config.borderColor} ${config.bgColor} animate-slide-up shadow-lg ${config.glowColor}`}>
       <div className="space-y-4">
         {/* Signal Header */}
         <div className="flex items-center justify-between">
@@ -50,7 +54,7 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
             <div>
               <h3 className={`text-xl font-bold ${config.color}`}>{config.label}</h3>
               <p className="text-sm text-muted-foreground">
-                {new Date(result.timestamp).toLocaleTimeString('pt-BR')}
+                Detectado: {new Date(result.timestamp).toLocaleTimeString('pt-BR')}
               </p>
             </div>
           </div>
@@ -60,6 +64,19 @@ export default function SignalDisplay({ result }: SignalDisplayProps) {
             <p className={`text-2xl font-bold ${config.color}`}>{result.confidence}%</p>
           </div>
         </div>
+
+        {/* Entry Time - Highlighted */}
+        {result.entryTime && (
+          <div className={`flex items-center justify-center gap-3 p-4 rounded-xl ${config.bgColor} border ${config.borderColor}`}>
+            <Clock className={`h-6 w-6 ${config.color}`} />
+            <div className="text-center">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Horário de Entrada</p>
+              <p className={`text-3xl font-mono font-bold ${config.color} animate-pulse`}>
+                {result.entryTime}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Confidence Bar */}
         <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">

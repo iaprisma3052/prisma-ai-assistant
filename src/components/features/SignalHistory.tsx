@@ -8,6 +8,7 @@ interface Signal {
   signal: 'COMPRA' | 'VENDA' | 'NEUTRO';
   confidence: number;
   timestamp: number;
+  entryTime?: string;
 }
 
 export default function SignalHistory() {
@@ -87,6 +88,14 @@ export default function SignalHistory() {
                         {signal.confidence}%
                       </span>
                     </div>
+
+                    {/* Entry Time */}
+                    {signal.entryTime && (
+                      <div className={`flex items-center gap-1 mb-2 ${color}`}>
+                        <Clock className="h-3 w-3" />
+                        <span className="text-xs font-mono font-bold">Entrada: {signal.entryTime}</span>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>
