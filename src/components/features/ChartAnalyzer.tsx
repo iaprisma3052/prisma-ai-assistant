@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { Camera, Upload, Play, Square, Loader2, Info } from 'lucide-react';
+import { Camera, Upload, Play, Square, Loader2, Video, VideoOff } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import SignalDisplay from './SignalDisplay';
 
@@ -11,6 +11,7 @@ interface AnalysisResult {
   confidence: number;
   analysis: string;
   timestamp: number;
+  entryTime: string;
 }
 
 interface ChartAnalyzerProps {
@@ -21,16 +22,37 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
   const [analyzing, setAnalyzing] = useState(false);
   const [autoMode, setAutoMode] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
+
+  // Update clock every second
+  useEffect(() => {
+    const clockInterval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(clockInterval);
+  }, []);
+
+  // Cleanup stream on unmount
+  useEffect(() => {
+    return () => {
+      stopStream();
+      if (autoIntervalRef.current) {
+        clearInterval(autoIntervalRef.current);
+      }
+    };
+  }, []);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
     if (!file.type.startsWith('image/')) {
       toast({
         title: 'Arquivo inválido',
@@ -40,7 +62,6 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
       return;
     }
 
-    // Validate file size (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
       toast({
         title: 'Arquivo muito grande',
@@ -50,36 +71,49 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
       return;
     }
 
-    // Create preview
     const reader = new FileReader();
     reader.onload = async (e) => {
       const base64 = e.target?.result as string;
-      setImagePreview(base64);
       await analyzeImage(base64);
     };
     reader.readAsDataURL(file);
   };
 
+  const getNextEntryTime = (): string => {
+    const now = new Date();
+    const seconds = now.getSeconds();
+    const minutes = now.getMinutes();
+    
+    // Calculate next minute mark (entry time)
+    let entryMinutes = minutes + 1;
+    let entryHours = now.getHours();
+    
+    if (entryMinutes >= 60) {
+      entryMinutes = 0;
+      entryHours = (entryHours + 1) % 24;
+    }
+    
+    return `${entryHours.toString().padStart(2, '0')}:${entryMinutes.toString().padStart(2, '0')}:00`;
+  };
+
   const analyzeImage = async (base64Image: string) => {
     setAnalyzing(true);
+    const entryTime = getNextEntryTime();
+    
     try {
       const { data, error } = await supabase.functions.invoke('analyze-chart', {
         body: { imageBase64: base64Image }
       });
 
-      if (error) {
-        throw error;
-      }
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (error) throw error;
+      if (data.error) throw new Error(data.error);
 
       const analysisResult: AnalysisResult = {
         signal: data.signal,
         confidence: data.confidence,
         analysis: data.analysis,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        entryTime: entryTime
       };
 
       setResult(analysisResult);
@@ -88,7 +122,7 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
 
       toast({
         title: `Sinal ${data.signal} detectado`,
-        description: `Confiança: ${data.confidence}%`,
+        description: `Entrada: ${entryTime} | Confiança: ${data.confidence}%`,
       });
     } catch (error) {
       console.error('Analysis error:', error);
@@ -108,16 +142,17 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
       id: crypto.randomUUID(),
       signal: signal.signal,
       confidence: signal.confidence,
-      timestamp: signal.timestamp
+      timestamp: signal.timestamp,
+      entryTime: signal.entryTime
     });
     const trimmed = history.slice(0, 50);
     localStorage.setItem('prisma-signals', JSON.stringify(trimmed));
     window.dispatchEvent(new Event('storage'));
   };
 
-  const captureScreen = async () => {
+  const startStream = async () => {
     try {
-      console.log('🎥 Requesting screen capture...');
+      console.log('🎥 Starting live stream...');
 
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
@@ -130,67 +165,103 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
         audio: false,
       });
 
-      console.log('✅ Screen capture granted');
-
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.autoplay = true;
-      video.playsInline = true;
-
-      await new Promise<void>((resolve) => {
-        video.onloadedmetadata = () => {
-          video.play().then(() => resolve());
-        };
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      const ctx = canvas.getContext('2d', { alpha: false });
-      if (!ctx) {
-        throw new Error('Failed to get canvas context');
+      streamRef.current = stream;
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
       }
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setIsStreaming(true);
 
-      stream.getTracks().forEach(track => {
-        track.stop();
-        console.log('🛑 Track stopped:', track.kind);
+      // Handle stream end (user clicks "Stop sharing")
+      stream.getVideoTracks()[0].onended = () => {
+        stopStream();
+        toast({
+          title: 'Stream encerrado',
+          description: 'A captura de tela foi finalizada'
+        });
+      };
+
+      toast({
+        title: 'Stream ao vivo iniciado',
+        description: 'Capturando tela em tempo real'
       });
 
-      const base64 = canvas.toDataURL('image/png', 1.0);
-      setImagePreview(base64);
-      console.log('📸 Screenshot captured');
-
-      await analyzeImage(base64);
-
     } catch (error) {
-      console.error('❌ Screen capture error:', error);
-
-      let errorMessage = 'Não foi possível capturar a tela';
+      console.error('❌ Stream error:', error);
+      let errorMessage = 'Não foi possível iniciar o stream';
 
       if (error instanceof DOMException) {
         if (error.name === 'NotAllowedError') {
-          errorMessage = 'Permissão de captura de tela negada. Por favor, permita o acesso.';
+          errorMessage = 'Permissão de captura de tela negada.';
         } else if (error.name === 'NotFoundError') {
           errorMessage = 'Nenhuma tela disponível para captura.';
-        } else if (error.name === 'NotSupportedError') {
-          errorMessage = 'Captura de tela não suportada neste navegador.';
         }
       }
 
       toast({
-        title: 'Erro ao capturar tela',
+        title: 'Erro ao iniciar stream',
         description: errorMessage,
         variant: 'destructive'
       });
     }
   };
 
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsStreaming(false);
+    
+    // Stop auto mode if streaming stops
+    if (autoMode) {
+      setAutoMode(false);
+      if (autoIntervalRef.current) {
+        clearInterval(autoIntervalRef.current);
+        autoIntervalRef.current = null;
+      }
+    }
+  };
+
+  const captureFrame = async () => {
+    if (!videoRef.current || !isStreaming) {
+      toast({
+        title: 'Stream não ativo',
+        description: 'Inicie o stream antes de capturar',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const base64 = canvas.toDataURL('image/png', 1.0);
+    
+    await analyzeImage(base64);
+  };
+
   const toggleAutoMode = () => {
+    if (!isStreaming) {
+      toast({
+        title: 'Stream necessário',
+        description: 'Inicie o stream ao vivo primeiro',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     const newAutoMode = !autoMode;
     setAutoMode(newAutoMode);
 
@@ -200,9 +271,12 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
         description: 'Análises serão feitas a cada 30 segundos'
       });
 
+      // Capture immediately first
+      captureFrame();
+
       autoIntervalRef.current = setInterval(() => {
-        if (!analyzing) {
-          captureScreen();
+        if (!analyzing && isStreaming) {
+          captureFrame();
         }
       }, 30000);
     } else {
@@ -218,21 +292,38 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
     }
   };
 
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('pt-BR', { 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit' 
+    });
+  };
+
   return (
     <Card className="p-6 glass-effect border-white/10">
       <div className="space-y-6">
-        {/* Header */}
+        {/* Header with Clock */}
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-foreground mb-1">Análise de Gráfico</h2>
-            <p className="text-sm text-muted-foreground">Envie ou capture um gráfico para análise com IA</p>
+            <p className="text-sm text-muted-foreground">Captura ao vivo com análise IA</p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-4">
+            {/* Live Clock */}
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Horário Atual</p>
+              <p className="text-2xl font-mono font-bold text-primary animate-pulse">
+                {formatTime(currentTime)}
+              </p>
+            </div>
+
             <Button
               variant={autoMode ? 'destructive' : 'default'}
               onClick={toggleAutoMode}
               className="gap-2 rounded-full"
+              disabled={!isStreaming}
             >
               {autoMode ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
               {autoMode ? 'Parar' : 'Auto'}
@@ -240,33 +331,49 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
           </div>
         </div>
 
-        {/* Image Preview Area */}
+        {/* Live Video Stream Area */}
         <div className="relative aspect-video bg-gradient-to-br from-secondary/50 to-primary/20 rounded-2xl overflow-hidden border-2 border-dashed border-white/10">
-          {imagePreview ? (
-            <img
-              src={imagePreview}
-              alt="Chart preview"
-              className="w-full h-full object-contain"
-            />
+          {isStreaming ? (
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-contain"
+              />
+              {/* Live indicator */}
+              <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-500/90 px-3 py-1 rounded-full">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                <span className="text-xs font-bold text-white">AO VIVO</span>
+              </div>
+              {/* Time overlay */}
+              <div className="absolute top-4 right-4 bg-black/70 px-3 py-1 rounded-lg">
+                <span className="text-sm font-mono text-white">{formatTime(currentTime)}</span>
+              </div>
+            </>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
-                <Camera className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-2">Nenhuma imagem carregada</p>
+                <Video className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">Stream não iniciado</p>
                 <p className="text-xs text-muted-foreground/60">
-                  Clique em "Capturar Tela" ou "Enviar Imagem"
+                  Clique em "Iniciar Stream" para captura ao vivo
                 </p>
               </div>
             </div>
           )}
 
+          {/* Hidden video ref for non-streaming mode */}
+          {!isStreaming && <video ref={videoRef} className="hidden" />}
+
           {analyzing && (
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
               <div className="text-center">
                 <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
                 <p className="text-foreground font-medium">Analisando com IA...</p>
                 <p className="text-sm text-muted-foreground mt-2">
-                  Usando Gemini AI para análise
+                  Gemini AI processando frame
                 </p>
               </div>
             </div>
@@ -274,14 +381,33 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {!isStreaming ? (
+            <Button
+              onClick={startStream}
+              className="gap-2 rounded-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 col-span-2"
+            >
+              <Video className="h-4 w-4" />
+              Iniciar Stream
+            </Button>
+          ) : (
+            <Button
+              onClick={stopStream}
+              variant="destructive"
+              className="gap-2 rounded-full col-span-2"
+            >
+              <VideoOff className="h-4 w-4" />
+              Parar Stream
+            </Button>
+          )}
+
           <Button
-            onClick={captureScreen}
-            disabled={analyzing}
+            onClick={captureFrame}
+            disabled={analyzing || !isStreaming}
             className="gap-2 rounded-full bg-gradient-to-r from-primary to-blue-500 hover:from-primary/90 hover:to-blue-600"
           >
             <Camera className="h-4 w-4" />
-            Capturar Tela
+            Capturar
           </Button>
 
           <Button
@@ -291,7 +417,7 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
             className="gap-2 rounded-full border-white/20 hover:bg-white/10"
           >
             <Upload className="h-4 w-4" />
-            Enviar Imagem
+            Upload
           </Button>
 
           <input
