@@ -24,28 +24,48 @@ serve(async (req) => {
 
     console.log('🔍 Starting chart analysis with Gemini AI...');
 
-    const prompt = `Você é um especialista em análise técnica de trading. Analise este gráfico de trading e forneça:
+    const prompt = `Você é a PRISMA ORACLE IA, um especialista em Price Action Raiz e análise técnica institucional.
 
-1. SINAL: Determine se é um sinal de COMPRA, VENDA ou NEUTRO
-2. CONFIANÇA: Nível de confiança da análise (0-100%)
-3. ANÁLISE: Explicação detalhada da análise técnica
+Analise este gráfico de trading e forneça:
 
-Considere:
-- Padrões de candlestick
-- Suportes e resistências
-- Médias móveis
-- Volume
-- Tendências de mercado
-- Indicadores técnicos visíveis
+1. SINAL: Determine se é COMPRA, VENDA ou NEUTRO baseado em Price Action
+2. CONFIANÇA: Nível de confiança (0-100%)
+3. ANÁLISE: Explicação detalhada usando conceitos de Price Action Raiz
+4. DADOS DO GRÁFICO: Extraia as últimas 20-30 velas visíveis no gráfico
+
+ESTRATÉGIA DE ANÁLISE:
+- Identifique fluxos de alta (N-Pivot: topos e fundos ascendentes)
+- Identifique fluxos de baixa (N-Pivot: topos e fundos descendentes)
+- PADRÃO W (Fundo Duplo): Reversão para COMPRA
+- PADRÃO M (Topo Duplo): Reversão para VENDA
+- Pavio longo inferior (rejeição de fundo) favorece COMPRA
+- Pavio longo superior (rejeição de topo) favorece VENDA
+- Lateralização (Trap Zone) = NEUTRO/AGUARDAR
+
+EXTRAÇÃO DE DADOS:
+Observe cuidadosamente cada vela no gráfico e extraia os valores aproximados de:
+- open (abertura)
+- high (máxima)
+- low (mínima)  
+- close (fechamento)
+
+Use a escala de preço visível no lado direito do gráfico como referência.
 
 Responda APENAS no formato JSON:
 {
   "signal": "COMPRA|VENDA|NEUTRO",
   "confidence": 0-100,
-  "analysis": "sua análise detalhada aqui"
+  "analysis": "sua análise detalhada de Price Action aqui",
+  "pattern": "nome do padrão identificado",
+  "chartData": [
+    {"open": 1.0850, "high": 1.0865, "low": 1.0845, "close": 1.0860},
+    {"open": 1.0860, "high": 1.0870, "low": 1.0855, "close": 1.0862}
+  ],
+  "supports": [1.0800, 1.0750],
+  "resistances": [1.0900, 1.0950]
 }
 
-Seja preciso, objetivo e baseie-se apenas no que você vê no gráfico.`;
+IMPORTANTE: Extraia os dados das velas EXATAMENTE como aparecem no gráfico, da esquerda para a direita (mais antiga para mais recente).`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -114,7 +134,21 @@ Seja preciso, objetivo e baseie-se apenas no que você vê no gráfico.`;
       result.confidence = 50;
     }
 
-    console.log('✅ Analysis completed successfully:', result.signal, result.confidence + '%');
+    // Process chart data with timestamps
+    if (result.chartData && Array.isArray(result.chartData)) {
+      const now = Math.floor(Date.now() / 1000);
+      result.chartData = result.chartData.map((candle: any, index: number) => ({
+        time: now - (result.chartData.length - 1 - index) * 60, // 1 minute candles
+        open: candle.open || 0,
+        high: candle.high || 0,
+        low: candle.low || 0,
+        close: candle.close || 0,
+      }));
+    } else {
+      result.chartData = [];
+    }
+
+    console.log('✅ Analysis completed:', result.signal, result.confidence + '%, candles:', result.chartData?.length || 0);
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
