@@ -1,10 +1,15 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Camera, Upload, Play, Square, Loader2, Video, VideoOff } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import SignalDisplay from './SignalDisplay';
+import TradingChart from './TradingChart';
+import TechnicalIndicators from './TechnicalIndicators';
+import { mockDataService } from '@/services/MockDataService';
+import { indicatorService } from '@/services/IndicatorService';
+import { KlineData } from '@/types';
 
 interface AnalysisResult {
   signal: 'COMPRA' | 'VENDA' | 'NEUTRO';
@@ -24,12 +29,75 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [chartData, setChartData] = useState<KlineData[]>([]);
+  const [indicators, setIndicators] = useState<{
+    rsi: number | null;
+    macd: { macd: number; signal: number; histogram: number } | null;
+    bollinger: { upper: number; middle: number; lower: number } | null;
+    sma20: number | null;
+    pattern: string;
+    supports: number[];
+    resistances: number[];
+  }>({
+    rsi: null,
+    macd: null,
+    bollinger: null,
+    sma20: null,
+    pattern: '',
+    supports: [],
+    resistances: [],
+  });
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
+
+  // Calculate indicators when chart data changes
+  const updateIndicators = useCallback((data: KlineData[]) => {
+    if (data.length < 20) return;
+
+    const rsi = indicatorService.calculateRSI(data);
+    const macd = indicatorService.calculateMACD(data);
+    const bollinger = indicatorService.calculateBollingerBands(data);
+    const sma20 = indicatorService.calculateSMA(data, 20);
+    const pattern = indicatorService.detectPattern(data);
+    const { supports, resistances } = indicatorService.detectSupportsResistances(data);
+
+    setIndicators({
+      rsi,
+      macd,
+      bollinger,
+      sma20,
+      pattern,
+      supports,
+      resistances,
+    });
+  }, []);
+
+  // Initialize and update chart data
+  useEffect(() => {
+    const initialData = mockDataService.generateInitialData(50);
+    setChartData(initialData);
+    updateIndicators(initialData);
+  }, [updateIndicators]);
+
+  // Start real-time updates when streaming
+  useEffect(() => {
+    if (isStreaming) {
+      mockDataService.startRealtime((newData) => {
+        setChartData(newData);
+        updateIndicators(newData);
+      }, 5000);
+    } else {
+      mockDataService.stopRealtime();
+    }
+
+    return () => {
+      mockDataService.stopRealtime();
+    };
+  }, [isStreaming, updateIndicators]);
 
   // Update clock every second
   useEffect(() => {
@@ -300,14 +368,16 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
     });
   };
 
+  const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : 0;
+
   return (
     <Card className="p-6 glass-effect border-white/10">
       <div className="space-y-6">
         {/* Header with Clock */}
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-foreground mb-1">Análise de Gráfico</h2>
-            <p className="text-sm text-muted-foreground">Captura ao vivo com análise IA</p>
+            <h2 className="text-2xl font-bold text-foreground mb-1">PRISMA ORACLE IA</h2>
+            <p className="text-sm text-muted-foreground">Captura ao vivo com análise em tempo real</p>
           </div>
 
           <div className="flex items-center gap-4">
@@ -331,106 +401,139 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
           </div>
         </div>
 
-        {/* Live Video Stream Area */}
-        <div className="relative aspect-video bg-gradient-to-br from-secondary/50 to-primary/20 rounded-2xl overflow-hidden border-2 border-dashed border-white/10">
-          {isStreaming ? (
-            <>
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-contain"
+        {/* Main Content - Side by Side */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left: Video Stream */}
+          <div className="lg:col-span-2 space-y-4">
+            {/* Live Video Stream Area */}
+            <div className="relative aspect-video bg-gradient-to-br from-secondary/50 to-primary/20 rounded-2xl overflow-hidden border-2 border-dashed border-white/10">
+              {isStreaming ? (
+                <>
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-contain"
+                  />
+                  {/* Live indicator */}
+                  <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-500/90 px-3 py-1 rounded-full">
+                    <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                    <span className="text-xs font-bold text-white">AO VIVO</span>
+                  </div>
+                  {/* Time overlay */}
+                  <div className="absolute top-4 right-4 bg-black/70 px-3 py-1 rounded-lg">
+                    <span className="text-sm font-mono text-white">{formatTime(currentTime)}</span>
+                  </div>
+                  {/* Next Entry Time */}
+                  <div className="absolute bottom-4 right-4 bg-primary/90 px-4 py-2 rounded-lg">
+                    <p className="text-[10px] text-white/80">PRÓXIMA ENTRADA</p>
+                    <p className="text-lg font-mono font-bold text-white">{getNextEntryTime()}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-center">
+                    <Video className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <p className="text-muted-foreground mb-2">Stream não iniciado</p>
+                    <p className="text-xs text-muted-foreground/60">
+                      Clique em "Iniciar Stream" para captura ao vivo
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Hidden video ref for non-streaming mode */}
+              {!isStreaming && <video ref={videoRef} className="hidden" />}
+
+              {analyzing && (
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
+                  <div className="text-center">
+                    <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
+                    <p className="text-foreground font-medium">Analisando com IA...</p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Gemini AI processando frame
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Trading Chart */}
+            <div className="glass-effect rounded-xl p-4 border border-white/10">
+              <TradingChart
+                data={chartData}
+                supports={indicators.supports}
+                resistances={indicators.resistances}
+                height={250}
               />
-              {/* Live indicator */}
-              <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-500/90 px-3 py-1 rounded-full">
-                <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-                <span className="text-xs font-bold text-white">AO VIVO</span>
-              </div>
-              {/* Time overlay */}
-              <div className="absolute top-4 right-4 bg-black/70 px-3 py-1 rounded-lg">
-                <span className="text-sm font-mono text-white">{formatTime(currentTime)}</span>
-              </div>
-            </>
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center">
-                <Video className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-2">Stream não iniciado</p>
-                <p className="text-xs text-muted-foreground/60">
-                  Clique em "Iniciar Stream" para captura ao vivo
-                </p>
-              </div>
             </div>
-          )}
+          </div>
 
-          {/* Hidden video ref for non-streaming mode */}
-          {!isStreaming && <video ref={videoRef} className="hidden" />}
+          {/* Right: Indicators Panel */}
+          <div className="space-y-4">
+            <TechnicalIndicators
+              rsi={indicators.rsi}
+              macd={indicators.macd}
+              bollinger={indicators.bollinger}
+              sma20={indicators.sma20}
+              currentPrice={currentPrice}
+              pattern={indicators.pattern}
+            />
 
-          {analyzing && (
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
-              <div className="text-center">
-                <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
-                <p className="text-foreground font-medium">Analisando com IA...</p>
-                <p className="text-sm text-muted-foreground mt-2">
-                  Gemini AI processando frame
-                </p>
-              </div>
+            {/* Action Buttons */}
+            <div className="grid grid-cols-2 gap-3">
+              {!isStreaming ? (
+                <Button
+                  onClick={startStream}
+                  className="gap-2 rounded-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 col-span-2"
+                >
+                  <Video className="h-4 w-4" />
+                  Iniciar Stream
+                </Button>
+              ) : (
+                <Button
+                  onClick={stopStream}
+                  variant="destructive"
+                  className="gap-2 rounded-full col-span-2"
+                >
+                  <VideoOff className="h-4 w-4" />
+                  Parar Stream
+                </Button>
+              )}
+
+              <Button
+                onClick={captureFrame}
+                disabled={analyzing || !isStreaming}
+                className="gap-2 rounded-full bg-gradient-to-r from-primary to-blue-500 hover:from-primary/90 hover:to-blue-600"
+              >
+                <Camera className="h-4 w-4" />
+                Capturar
+              </Button>
+
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={analyzing}
+                variant="outline"
+                className="gap-2 rounded-full border-white/20 hover:bg-white/10"
+              >
+                <Upload className="h-4 w-4" />
+                Upload
+              </Button>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
             </div>
-          )}
+
+            {/* Analysis Result */}
+            {result && <SignalDisplay result={result} />}
+          </div>
         </div>
-
-        {/* Action Buttons */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {!isStreaming ? (
-            <Button
-              onClick={startStream}
-              className="gap-2 rounded-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 col-span-2"
-            >
-              <Video className="h-4 w-4" />
-              Iniciar Stream
-            </Button>
-          ) : (
-            <Button
-              onClick={stopStream}
-              variant="destructive"
-              className="gap-2 rounded-full col-span-2"
-            >
-              <VideoOff className="h-4 w-4" />
-              Parar Stream
-            </Button>
-          )}
-
-          <Button
-            onClick={captureFrame}
-            disabled={analyzing || !isStreaming}
-            className="gap-2 rounded-full bg-gradient-to-r from-primary to-blue-500 hover:from-primary/90 hover:to-blue-600"
-          >
-            <Camera className="h-4 w-4" />
-            Capturar
-          </Button>
-
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={analyzing}
-            variant="outline"
-            className="gap-2 rounded-full border-white/20 hover:bg-white/10"
-          >
-            <Upload className="h-4 w-4" />
-            Upload
-          </Button>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-        </div>
-
-        {/* Analysis Result */}
-        {result && <SignalDisplay result={result} />}
       </div>
     </Card>
   );
