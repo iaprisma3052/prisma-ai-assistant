@@ -83,12 +83,22 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
     updateIndicators(initialData);
   }, [updateIndicators]);
 
-  // Start real-time updates when streaming
+  // Only use mock data updates when NOT actively capturing
+  // When capturing, the chart data comes from AI extraction
   useEffect(() => {
-    if (isStreaming) {
+    if (isStreaming && !analyzing) {
+      // Keep realtime updates for mock data when not analyzing
+      // But when we get AI data, it will override this
       mockDataService.startRealtime((newData) => {
-        setChartData(newData);
-        updateIndicators(newData);
+        // Only update if we haven't received AI chart data recently
+        setChartData(prev => {
+          // Keep AI data if it was recently updated (has different structure)
+          if (prev.length > 0 && prev[prev.length - 1].time > newData[newData.length - 1].time - 120) {
+            return prev;
+          }
+          updateIndicators(newData);
+          return newData;
+        });
       }, 5000);
     } else {
       mockDataService.stopRealtime();
@@ -97,7 +107,7 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
     return () => {
       mockDataService.stopRealtime();
     };
-  }, [isStreaming, updateIndicators]);
+  }, [isStreaming, analyzing, updateIndicators]);
 
   // Update clock every second
   useEffect(() => {
@@ -176,6 +186,23 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
       if (error) throw error;
       if (data.error) throw new Error(data.error);
 
+      // Update chart with extracted data from captured screen
+      if (data.chartData && data.chartData.length > 0) {
+        setChartData(data.chartData);
+        updateIndicators(data.chartData);
+        console.log('📊 Chart updated with', data.chartData.length, 'candles from captured screen');
+      }
+
+      // Update supports and resistances from AI analysis
+      if (data.supports || data.resistances) {
+        setIndicators(prev => ({
+          ...prev,
+          supports: data.supports || prev.supports,
+          resistances: data.resistances || prev.resistances,
+          pattern: data.pattern || prev.pattern,
+        }));
+      }
+
       const analysisResult: AnalysisResult = {
         signal: data.signal,
         confidence: data.confidence,
@@ -190,7 +217,7 @@ export default function ChartAnalyzer({ onAnalysisComplete }: ChartAnalyzerProps
 
       toast({
         title: `Sinal ${data.signal} detectado`,
-        description: `Entrada: ${entryTime} | Confiança: ${data.confidence}%`,
+        description: `Entrada: ${entryTime} | Confiança: ${data.confidence}% | ${data.pattern || 'Padrão identificado'}`,
       });
     } catch (error) {
       console.error('Analysis error:', error);
